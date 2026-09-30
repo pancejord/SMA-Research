@@ -185,13 +185,23 @@ from(bucket: params.bucket)
             raise StorageError("Stored processing checkpoints are invalid; startup stopped") from None
         return checkpoints
 
-    # Summarize stored physical hits once each so outfit rankings can be rebuilt after restarting.
-    def load_hit_summaries(self) -> list[dict]:
+    # Summarize hits for all history or an inclusive timestamp window, counting each physical hit once.
+    def load_hit_summaries(self, *, start: datetime | None = None,
+                           end: datetime | None = None) -> list[dict]:
+        first = start if start is not None else datetime(1970, 1, 1, tzinfo=timezone.utc)
+        last = end if end is not None else datetime.now(timezone.utc)
+        for timestamp in (first, last):
+            if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+                raise ValueError("Hit query bounds must be timezone-aware")
+        if first > last:
+            raise ValueError("Hit query start must not be after end")
+        # Flux excludes stop, so add one microsecond to include a candle at the close.
+        stop = last.astimezone(timezone.utc) + timedelta(microseconds=1)
         # Only the outfits field is counted; counting every field would multiply
         # each physical hit. Saved memberships preserve the original attribution.
         query = '''
 from(bucket: params.bucket)
-    |> range(start: 0)
+    |> range(start: time(v: params.start), stop: time(v: params.stop))
     |> filter(fn: (r) => r._measurement == "sma_hits" and r._field == "outfits")
     |> filter(fn: (r) => r.research_version == params.version)
     |> rename(columns: {_value: "outfits"})
@@ -205,7 +215,10 @@ from(bucket: params.bucket)
         })
     )
 '''
-        tables = self._query(query, {"bucket": self._bucket, "version": RESEARCH_VERSION})
+        tables = self._query(query, {
+            "bucket": self._bucket, "version": RESEARCH_VERSION,
+            "start": first.astimezone(timezone.utc).isoformat(), "stop": stop.isoformat(),
+        })
         summaries = []
         try:
             for table in tables:

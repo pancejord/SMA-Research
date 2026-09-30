@@ -28,6 +28,51 @@ and provider alignment validation are still required; time-of-day settings alone
 do not implement holidays or early closes. Phase 2's `market_calendar.py` now uses
 the NYSE calendar for these sessions; real provider-price comparison is pending.
 
+## Historical rankings: 2–20 trading days
+
+For a browser interface, see [`frontend/README.md`](frontend/README.md). Start it
+with `cd frontend` followed by `npm run dev`, then open `http://127.0.0.1:3000`.
+The dashboard provides trading-day, ticker, timeframe, and end-date filters and
+reads the same stored ranking data as the terminal command below.
+
+`query_rankings.py` queries InfluxDB for the highest-hit **outfit/ticker/timeframe
+combinations**, with a separate leaderboard for each requested rolling window.
+It reuses the exchange calendar to skip holidays and weekends. Early-close days
+count as one trading day. Windows use the latest **completed sessions**: during
+today's trading session, the report ends at the previous completed session.
+After today's close it includes today; collection or processing may still lag.
+
+```powershell
+# Every rolling window: last 2, last 3, ... last 20 completed trading days.
+.\.venv\Scripts\python.exe query_rankings.py
+
+# Selected windows, top 10 distinct outfit/ticker/timeframe combinations per window.
+.\.venv\Scripts\python.exe query_rankings.py --days 2 5 10 20 --top 10
+
+# Restrict the results to one ticker and timeframe.
+.\.venv\Scripts\python.exe query_rankings.py --days 5 --ticker NVDA --timeframe 33m
+
+# Use the last completed session on or before a historical date.
+.\.venv\Scripts\python.exe query_rankings.py --days 20 --through 2026-09-29
+```
+
+Each report prints its actual ET start/end timestamps and the rank, outfit,
+ticker, timeframe, hit count, and latest hit. The final session-close candle is
+included. Counts use saved outfit memberships and the active `RESEARCH_VERSION`.
+Two matching OHLC fields still count as two physical hits. Ties sort by latest
+hit, then name. Zero-hit combinations are omitted; no results are reported clearly.
+
+These are overlapping rolling windows, not disjoint two-day or twenty-day buckets.
+Missing collection days are not replaced with earlier days containing hits.
+Reports reflect available stored data; an N-session window does not prove that
+collection covered all N sessions. Database retention and collection delays can
+reduce the available counts.
+
+This is a read-only reporting command: it needs InfluxDB credentials with read
+permission, but no Massive key. It does not fetch candles, write data, or modify
+live ranking counters. The default runs 19 summary queries; request fewer windows
+with `--days` when desired. Tests and live queries have not been run.
+
 ## Setup (PowerShell, Python 3.10+)
 
 For a separate history download before starting the collector, see
